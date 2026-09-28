@@ -443,8 +443,39 @@ def _process_namespace(name, namespaces, ns_sep=':', attr_prefix='@'):
         ns_res = namespaces.get(ns.strip(attr_prefix))
         name = '{}{}{}{}'.format(
             attr_prefix if ns.startswith(attr_prefix) else '',
-            ns_res, ns_sep, name) if ns_res else name
+            ns_res, ':', name) if ns_res else name
     return name
+
+
+def _merge_namespaces(namespaces, value, attr_prefix='@'):
+    """Merge namespace prefixes declared in the value with explicit mappings.
+
+    `parse(..., process_namespaces=True)` records namespace declarations as an
+    ``attr_prefix + 'xmlns'`` dict on the element where they were declared.
+    Those declarations provide the URI -> prefix mapping needed to turn
+    expanded names (``uri:local``) back into prefixed names, so that
+    parse/unparse round-trips even when no explicit `namespaces` mapping is
+    given. Explicitly provided `namespaces` take precedence.
+    """
+    values = value if isinstance(value, list) else [value]
+    derived = None
+    for v in values:
+        if not isinstance(v, dict):
+            continue
+        decls = v.get(attr_prefix + 'xmlns')
+        if not isinstance(decls, dict):
+            continue
+        for prefix, uri in decls.items():
+            if not isinstance(uri, str):
+                continue
+            if derived is None:
+                derived = {}
+            derived.setdefault(uri, prefix)
+    if not derived:
+        return namespaces
+    if namespaces:
+        derived.update(namespaces)
+    return derived
 
 
 def _emit(key, value, content_handler,
@@ -481,6 +512,7 @@ def _emit(key, value, content_handler,
                 content_handler.ignorableWhitespace(newl)
         return
 
+    namespaces = _merge_namespaces(namespaces, value, attr_prefix)
     key = _process_namespace(key, namespaces, namespace_separator, attr_prefix)
     if preprocessor is not None:
         result = preprocessor(key, value)
@@ -510,6 +542,12 @@ def _emit(key, value, content_handler,
             if ik == cdata_key:
                 if iv is None:
                     cdata = None
+                elif isinstance(iv, list):
+                    # force_list wraps character data in a list; emit each
+                    # chunk so parsing joins them back into the same value.
+                    cdata = [_convert_value_to_string(item, encoding=encoding,
+                                                      bytes_errors=bytes_errors)
+                             for item in iv]
                 else:
                     cdata = _convert_value_to_string(iv, encoding=encoding, bytes_errors=bytes_errors)
                 continue
@@ -518,8 +556,16 @@ def _emit(key, value, content_handler,
                                         attr_prefix)
                 if ik == attr_prefix + 'xmlns' and isinstance(iv, dict):
                     for k, v in iv.items():
-                        _validate_name(k, "attribute")
-                        attr = 'xmlns{}'.format(f':{k}' if k else '')
+                        decl_prefix = k
+                        if namespaces and isinstance(v, str):
+                            mapped_prefix = namespaces.get(v)
+                            if isinstance(mapped_prefix, str):
+                                # Keep declarations consistent with the
+                                # prefixes used for element/attribute names.
+                                decl_prefix = mapped_prefix
+                        _validate_name(decl_prefix, "attribute")
+                        attr = 'xmlns{}'.format(
+                            f':{decl_prefix}' if decl_prefix else '')
                         attrs[attr] = '' if v is None else _convert_value_to_string(
                             v, encoding=encoding, bytes_errors=bytes_errors
                         )
@@ -550,7 +596,11 @@ def _emit(key, value, content_handler,
                   expand_iter=expand_iter, encoding=encoding,
                   bytes_errors=bytes_errors, comment_key=comment_key)
         if cdata is not None:
-            content_handler.characters(cdata)
+            if isinstance(cdata, list):
+                for cdata_chunk in cdata:
+                    content_handler.characters(cdata_chunk)
+            else:
+                content_handler.characters(cdata)
         if pretty and children:
             content_handler.ignorableWhitespace(depth * indent)
         content_handler.endElement(key)
@@ -561,6 +611,10 @@ def _emit(key, value, content_handler,
 class _XMLGenerator(XMLGenerator):
     def comment(self, text):
         text = _validate_comment(text)
+        # With short_empty_elements=True the start tag is still pending;
+        # flush it so the comment is not written inside the tag.
+        if getattr(self, '_pending_start_element', False):
+            self._finish_pending_start_element()
         self._write(f"<!--{escape(text)}-->")
 
 

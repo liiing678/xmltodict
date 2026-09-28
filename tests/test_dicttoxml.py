@@ -778,3 +778,77 @@ def test_pretty_print_top_level_comment_with_int_indent():
     <!--top-->
     <a>1</a>''')
     assert xml == unparse(obj, pretty=True, indent=4)
+
+
+def test_namespace_roundtrip_derives_prefixes_from_xmlns_declarations():
+    # parse(..., process_namespaces=True) records declarations under @xmlns;
+    # unparse must reuse them so expanded names become prefixed names again
+    # even without an explicit `namespaces` mapping.
+    xml = '<a xmlns:n="urn:x"><n:b>t</n:b></a>'
+    obj = parse(xml, process_namespaces=True)
+    assert parse(unparse(obj), process_namespaces=True) == obj
+    assert '<n:b>' in unparse(obj)
+
+
+def test_namespace_roundtrip_derives_prefixes_for_attributes():
+    xml = '<a xmlns:n="urn:x"><b n:k="1">t</b></a>'
+    obj = parse(xml, process_namespaces=True)
+    assert parse(unparse(obj), process_namespaces=True) == obj
+    assert 'n:k="1"' in unparse(obj)
+
+
+def test_namespace_roundtrip_derives_default_namespace():
+    xml = '<a xmlns="urn:d"><b>t</b></a>'
+    obj = parse(xml, process_namespaces=True)
+    assert parse(unparse(obj), process_namespaces=True) == obj
+    assert '<a xmlns="urn:d">' in unparse(obj)
+
+
+def test_namespace_roundtrip_explicit_namespaces_win_over_derived():
+    obj = parse('<a xmlns:n="urn:x"><n:b>t</n:b></a>', process_namespaces=True)
+    xml = unparse(obj, namespaces={"urn:x": "m"})
+    assert '<m:b>' in xml
+    # The declaration is rewritten to match, so the output stays well-formed.
+    assert 'xmlns:m="urn:x"' in xml
+    reparsed = parse(xml, process_namespaces=True)
+    assert reparsed["a"]["urn:x:b"] == "t"
+
+
+def test_namespace_roundtrip_with_custom_namespace_separator():
+    xml = '<a xmlns:n="urn:x"><n:b>t</n:b></a>'
+    obj = parse(xml, process_namespaces=True, namespace_separator="|")
+    xml2 = unparse(obj, namespace_separator="|")
+    # Output must use ":" (XML prefix syntax), not the dict key separator.
+    assert "<n:b>" in xml2
+    assert parse(xml2, process_namespaces=True, namespace_separator="|") == obj
+
+
+def test_force_list_text_roundtrip():
+    # force_list=True wraps #text in a list; unparse must emit the chunks as
+    # character data rather than the repr of the list.
+    obj = parse('<a x="1">t</a>', force_list=True)
+    assert obj == {"a": [{"@x": "1", "#text": ["t"]}]}
+    xml = unparse(obj)
+    assert "<a x=\"1\">t</a>" in xml
+    assert parse(xml, force_list=True) == obj
+
+
+def test_force_list_text_roundtrip_nested():
+    obj = parse('<a><b x="1">t</b><b>u</b></a>', force_list=True)
+    assert parse(unparse(obj), force_list=True) == obj
+
+
+def test_comment_with_short_empty_elements_is_well_formed():
+    obj = {"a": {"#comment": "c", "b": "1"}}
+    xml = unparse(obj, short_empty_elements=True)
+    assert _strip(xml) == "<a><!--c--><b>1</b></a>"
+    assert parse(xml, process_comments=True) == obj
+
+
+def test_comment_with_short_empty_elements_pretty_matches_compact():
+    obj = {"a": {"#comment": "c", "b": None}}
+    compact = unparse(obj, short_empty_elements=True)
+    pretty = unparse(obj, short_empty_elements=True, pretty=True)
+    assert parse(compact, process_comments=True) == parse(
+        pretty, process_comments=True
+    )

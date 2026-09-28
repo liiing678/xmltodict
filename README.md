@@ -236,6 +236,7 @@ Convert a Python dictionary back into XML.
 - `pretty=False`: Pretty-print the XML output. This adds indentation/newlines for readability, so it should generally not be combined with parsed whitespace-preserving content when exact round-tripping matters.
 - `indent='\t'`: Indentation string for pretty printing. May also be an integer number of spaces.
 - `newl='\n'`: Newline character for pretty printing.
+- `namespaces=None`: Mapping of namespace URIs to prefixes used to turn expanded names (`uri:local`, as produced by `parse(..., process_namespaces=True)`) back into prefixed names. When omitted, prefixes are derived from the `@xmlns` declaration dicts recorded by `parse`, so namespace round-trips work out of the box.
 - `expand_iter=None`: Tag name to use for items in nested lists (breaks roundtripping).
 
 > **Note:** When building XML from dictionaries, keys whose values are empty
